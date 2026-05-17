@@ -1,6 +1,6 @@
 // ============================================================
-//  GYM AI RECEPTIONIST — WebSocket Server for Exotel Voicebot
-//  Stack: Exotel Voicebot (ws) + Groq AI (free) + ElevenLabs (voice)
+//  GYM AI RECEPTIONIST — Exotel Voicebot WebSocket Server v3
+//  Using MP3 audio with proper Exotel media event format
 // ============================================================
 
 const express = require('express');
@@ -26,205 +26,165 @@ const CONFIG = {
 };
 
 console.log('CONFIG CHECK:');
-console.log('  BASE_URL:', CONFIG.BASE_URL);
 console.log('  GROQ_API_KEY:', CONFIG.GROQ_API_KEY ? 'SET' : 'MISSING');
 console.log('  ELEVENLABS_API_KEY:', CONFIG.ELEVENLABS_API_KEY ? 'SET' : 'MISSING');
+console.log('  BASE_URL:', CONFIG.BASE_URL);
 
-const GYM_PROFILE = {
-  name: 'Titan Fitness Gym',
-  systemPrompt: `You are Priya, the friendly AI receptionist at Titan Fitness Gym in Bengaluru.
-Speak naturally and warmly like a real human receptionist on a phone call.
-Keep answers SHORT - max 2-3 sentences since this is a voice call.
-You can mix a little Hindi naturally (e.g. "bilkul", "zaroor").
+const GYM_PROMPT = `You are Priya, friendly AI receptionist at Titan Fitness Gym in Bengaluru.
+Speak naturally and warmly. Keep answers SHORT - max 2 sentences for voice calls.
 
-GYM INFORMATION:
+GYM INFO:
 - Location: Koramangala 5th Block, Bengaluru
-- Timings: Mon-Sat 5:30 AM to 10:30 PM, Sunday 6 AM to 8 PM
-- Memberships: Basic 1999 rupees/month | Premium 2999 rupees/month (includes classes) | Quarterly 5999 | Annual 19999
-- Personal Trainers: 6 certified PTs, sessions from 499 rupees
-- Free trial: Yes, 1-day free pass available
-- Facilities: AC gym, cardio zone, free weights, group studio, steam room, protein bar
+- Timings: Mon-Sat 5:30 AM-10:30 PM, Sunday 6 AM-8 PM
+- Memberships: Basic 1999/month, Premium 2999/month, Quarterly 5999, Annual 19999
+- Personal Trainers: 6 certified PTs from 499/session
+- Free trial: Yes, 1-day free pass
+- Facilities: AC gym, cardio, free weights, group studio, steam room, protein bar
 
-RULES:
-- Keep responses under 30 words for voice
-- For trial booking ask their name and preferred date
-- End calls with: "Thank you for calling Titan Fitness! Have a great day!"`,
-};
+Keep responses under 25 words. For trial ask name and date.`;
 
-// Groq AI
 async function getAIResponse(messages) {
-  const response = await axios.post(
-    'https://api.groq.com/openai/v1/chat/completions',
-    {
-      model: 'llama-3.1-8b-instant',
-      messages: [
-        { role: 'system', content: GYM_PROFILE.systemPrompt },
-        ...messages
-      ],
-      max_tokens: 100,
-      temperature: 0.7,
-    },
-    {
-      headers: {
-        'Authorization': `Bearer ${CONFIG.GROQ_API_KEY}`,
-        'Content-Type': 'application/json'
-      }
-    }
-  );
-  return response.data.choices[0].message.content;
-}
-
-// ElevenLabs TTS — returns base64 audio
-async function textToSpeechBase64(text) {
-  const response = await axios.post(
-    `https://api.elevenlabs.io/v1/text-to-speech/${CONFIG.ELEVENLABS_VOICE_ID}`,
-    {
-      text,
-      model_id: 'eleven_turbo_v2',
-      voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-    },
-    {
-      headers: {
-        'xi-api-key': CONFIG.ELEVENLABS_API_KEY,
-        'Content-Type': 'application/json'
+  try {
+    const res = await axios.post(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        model: 'llama-3.1-8b-instant',
+        messages: [{ role: 'system', content: GYM_PROMPT }, ...messages],
+        max_tokens: 80,
+        temperature: 0.7,
       },
-      responseType: 'arraybuffer',
-    }
-  );
-  return Buffer.from(response.data).toString('base64');
+      { headers: { 'Authorization': `Bearer ${CONFIG.GROQ_API_KEY}` } }
+    );
+    return res.data.choices[0].message.content.trim();
+  } catch (err) {
+    console.error('Groq error:', err.message);
+    return "Namaste! Welcome to Titan Fitness Gym. How can I help you?";
+  }
 }
 
-// Serve audio files
+// Get audio as MP3 buffer from ElevenLabs
+async function getAudioBuffer(text) {
+  try {
+    const res = await axios.post(
+      `https://api.elevenlabs.io/v1/text-to-speech/${CONFIG.ELEVENLABS_VOICE_ID}`,
+      {
+        text,
+        model_id: 'eleven_turbo_v2',
+        voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+      },
+      {
+        headers: { 'xi-api-key': CONFIG.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' },
+        responseType: 'arraybuffer',
+      }
+    );
+    return Buffer.from(res.data);
+  } catch (err) {
+    console.error('ElevenLabs error:', err.response?.status, err.message);
+    return null;
+  }
+}
+
+// Save audio and return URL
+async function getAudioUrl(text) {
+  const buf = await getAudioBuffer(text);
+  if (!buf) return null;
+  const filename = `speech_${Date.now()}.mp3`;
+  fs.writeFileSync(path.join('/tmp', filename), buf);
+  return `${CONFIG.BASE_URL}/audio/${filename}`;
+}
+
+// Serve audio
 app.get('/audio/:filename', (req, res) => {
-  const filepath = path.join('/tmp', req.params.filename);
-  if (fs.existsSync(filepath)) {
+  const fp = path.join('/tmp', req.params.filename);
+  if (fs.existsSync(fp)) {
     res.set('Content-Type', 'audio/mpeg');
-    res.sendFile(filepath);
-    setTimeout(() => fs.existsSync(filepath) && fs.unlinkSync(filepath), 60000);
+    res.sendFile(fp);
+    setTimeout(() => fs.existsSync(fp) && fs.unlinkSync(fp), 60000);
   } else {
     res.status(404).send('Not found');
   }
 });
 
-// HTTP endpoint for Exotel Passthru (backup)
-app.all('/incoming-call', async (req, res) => {
-  console.log('📞 HTTP incoming call');
-  try {
-    const greeting = await getAIResponse([
-      { role: 'user', content: 'Customer just called. Give a warm short greeting.' }
-    ]);
-    console.log('🤖 Greeting:', greeting);
-
-    const audioData = await textToSpeechBase64(greeting);
-    const filename = `speech_${Date.now()}.mp3`;
-    fs.writeFileSync(path.join('/tmp', filename), Buffer.from(audioData, 'base64'));
-
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Play>${CONFIG.BASE_URL}/audio/${filename}</Play>
-  <Gather input="speech" action="${CONFIG.BASE_URL}/process-speech" speechTimeout="auto" language="en-IN">
-  </Gather>
-  <Redirect>${CONFIG.BASE_URL}/no-input</Redirect>
-</Response>`;
-    res.type('text/xml');
-    res.send(xml);
-  } catch (err) {
-    console.error('Error:', err.message);
-    res.type('text/xml');
-    res.send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, technical issue. Please call back.</Say><Hangup/></Response>`);
-  }
-});
-
-app.all('/process-speech', async (req, res) => {
-  const speech = req.body?.SpeechResult || req.query?.SpeechResult || '';
-  console.log('🎤 Speech:', speech);
-  try {
-    const reply = await getAIResponse([
-      { role: 'user', content: speech || 'Hello' }
-    ]);
-    console.log('🤖 Reply:', reply);
-
-    const audioData = await textToSpeechBase64(reply);
-    const filename = `speech_${Date.now()}.mp3`;
-    fs.writeFileSync(path.join('/tmp', filename), Buffer.from(audioData, 'base64'));
-
-    const endKeywords = ['bye', 'goodbye', 'thank you bye', 'ok bye'];
-    const isEnding = endKeywords.some(kw => speech.toLowerCase().includes(kw));
-
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Play>${CONFIG.BASE_URL}/audio/${filename}</Play>
-  ${isEnding ? '<Hangup/>' : `<Gather input="speech" action="${CONFIG.BASE_URL}/process-speech" speechTimeout="auto" language="en-IN"></Gather><Redirect>${CONFIG.BASE_URL}/no-input</Redirect>`}
-</Response>`;
-    res.type('text/xml');
-    res.send(xml);
-  } catch (err) {
-    console.error('Error:', err.message);
-    res.type('text/xml');
-    res.send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, one moment please.</Say><Redirect>${CONFIG.BASE_URL}/no-input</Redirect></Response>`);
-  }
-});
-
-app.all('/no-input', async (req, res) => {
-  res.type('text/xml');
-  res.send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="woman" language="en-IN">Sorry, I didn't catch that. Could you please repeat?</Say>
-  <Gather input="speech" action="${CONFIG.BASE_URL}/process-speech" speechTimeout="auto" language="en-IN"></Gather>
-</Response>`);
-});
-
-// ── WEBSOCKET for Exotel Voicebot ────────────────────────────
+// WebSocket — Exotel Voicebot
 wss.on('connection', (ws, req) => {
-  console.log('🔌 WebSocket connected:', req.url);
+  console.log('🔌 WS connected from:', req.socket.remoteAddress);
   const messages = [];
-  let isGreeted = false;
+  let streamSid = null;
+  let allEvents = new Set();
 
-  ws.on('message', async (data) => {
+  const playText = async (text) => {
+    console.log('🤖 Speaking:', text);
+    const audioUrl = await getAudioUrl(text);
+    if (!audioUrl) return;
+
+    // Try multiple response formats that Exotel might expect
+    if (ws.readyState !== WebSocket.OPEN) return;
+
+    // Format 1: playAudio event
+    ws.send(JSON.stringify({
+      event: 'playAudio',
+      streamSid,
+      playAudio: { url: audioUrl }
+    }));
+
+    // Format 2: media with URL
+    ws.send(JSON.stringify({
+      event: 'media',
+      streamSid,
+      media: { url: audioUrl }
+    }));
+
+    console.log('📤 Sent audio URL:', audioUrl);
+  };
+
+  ws.on('message', async (raw) => {
+    let msg;
     try {
-      const msg = JSON.parse(data.toString());
-      console.log('📨 WS message type:', msg.event || msg.type);
+      msg = JSON.parse(raw.toString());
+    } catch {
+      console.log('📨 Binary/non-JSON data received, length:', raw.length);
+      return;
+    }
 
-      // Exotel Voicebot sends 'start' event first
-      if (msg.event === 'start' || !isGreeted) {
-        isGreeted = true;
-        const greeting = await getAIResponse([
-          { role: 'user', content: 'Customer just called. Give a warm short greeting in under 20 words.' }
-        ]);
-        console.log('🤖 WS Greeting:', greeting);
-        const audioB64 = await textToSpeechBase64(greeting);
-        ws.send(JSON.stringify({ event: 'playAudio', audio: audioB64, encoding: 'mp3' }));
-        messages.push({ role: 'assistant', content: greeting });
-        return;
-      }
+    const evt = msg.event || 'unknown';
+    if (!allEvents.has(evt)) {
+      allEvents.add(evt);
+      console.log('📨 New event type:', evt, JSON.stringify(msg).substring(0, 200));
+    }
 
-      // Speech transcript from caller
-      if (msg.event === 'transcript' || msg.text || msg.speech) {
-        const userText = msg.text || msg.speech || msg.transcript || '';
-        if (!userText.trim()) return;
-        console.log('🎤 WS Speech:', userText);
-        messages.push({ role: 'user', content: userText });
+    if (evt === 'start') {
+      streamSid = msg.start?.streamSid || msg.streamSid || 'sid_' + Date.now();
+      console.log('📞 Call started, streamSid:', streamSid);
+      const greeting = await getAIResponse([
+        { role: 'user', content: 'Customer called. Greet them warmly in under 20 words.' }
+      ]);
+      messages.push({ role: 'assistant', content: greeting });
+      await playText(greeting);
 
-        const reply = await getAIResponse(messages);
-        console.log('🤖 WS Reply:', reply);
-        messages.push({ role: 'assistant', content: reply });
+    } else if (evt === 'transcript' || evt === 'transcription' || evt === 'speech') {
+      const text = msg.transcript || msg.text || msg.speech || msg.utterance || '';
+      if (!text.trim()) return;
+      console.log('🎤 Customer:', text);
+      messages.push({ role: 'user', content: text });
+      const reply = await getAIResponse(messages);
+      messages.push({ role: 'assistant', content: reply });
+      await playText(reply);
 
-        const audioB64 = await textToSpeechBase64(reply);
-        ws.send(JSON.stringify({ event: 'playAudio', audio: audioB64, encoding: 'mp3' }));
-      }
-    } catch (err) {
-      console.error('WS error:', err.message);
+    } else if (evt === 'stop') {
+      console.log('📴 Call ended');
+    }
+    // Log ALL non-media events fully so we can learn the protocol
+    if (evt !== 'media') {
+      console.log('FULL EVENT:', JSON.stringify(msg).substring(0, 300));
     }
   });
 
-  ws.on('close', () => console.log('🔌 WebSocket disconnected'));
+  ws.on('close', () => {
+    console.log('🔌 WS disconnected. All events seen:', [...allEvents].join(', '));
+  });
   ws.on('error', (err) => console.error('WS error:', err.message));
 });
 
-app.get('/', (req, res) => {
-  res.json({ status: '🏋️ Gym AI Receptionist running!', wsUrl: `wss://gym-ai-receptionist.onrender.com` });
-});
+app.get('/', (req, res) => res.json({ status: '🏋️ Running', wsUrl: 'wss://gym-ai-receptionist.onrender.com' }));
 
-server.listen(CONFIG.PORT, () => {
-  console.log(`🏋️  Gym AI Receptionist live on port ${CONFIG.PORT}`);
-});
+server.listen(CONFIG.PORT, () => console.log(`🏋️ Live on port ${CONFIG.PORT}`));
