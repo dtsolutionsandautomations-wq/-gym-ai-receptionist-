@@ -14,7 +14,7 @@ app.use(express.json());
 
 // ── CONFIG ───────────────────────────────────────────────────
 const CONFIG = {
-  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+  GROQ_API_KEY: process.env.GROQ_API_KEY,
   ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY,
   ELEVENLABS_VOICE_ID: process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL',
   EXOTEL_SID: process.env.EXOTEL_SID,
@@ -25,7 +25,7 @@ const CONFIG = {
 
 console.log('CONFIG CHECK:');
 console.log('  BASE_URL:', CONFIG.BASE_URL);
-console.log('  GEMINI_API_KEY:', CONFIG.GEMINI_API_KEY ? 'SET' : 'MISSING');
+console.log('  GROQ_API_KEY:', CONFIG.GROQ_API_KEY ? 'SET' : 'MISSING');
 console.log('  ELEVENLABS_API_KEY:', CONFIG.ELEVENLABS_API_KEY ? 'SET' : 'MISSING');
 
 // ── TWIML BUILDER (Exotel uses same XML format as Twilio) ────
@@ -97,27 +97,37 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
-// ── GEMINI AI RESPONSE (FREE) ────────────────────────────────
+// ── GROQ AI RESPONSE (FREE, NO QUOTA ISSUES) ────────────────
 async function getAIResponse(userMessage, callSid, gymProfile) {
   const history = getHistory(callSid);
-  history.push({ role: 'user', parts: [{ text: userMessage }] });
+  history.push({ role: 'user', content: userMessage });
   history._ts = Date.now();
 
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${CONFIG.GEMINI_API_KEY}`,
+      'https://api.groq.com/openai/v1/chat/completions',
       {
-        system_instruction: { parts: [{ text: gymProfile.systemPrompt }] },
-        contents: history.filter(m => m.role), // exclude _ts
-        generationConfig: { maxOutputTokens: 150, temperature: 0.7 },
+        model: 'llama-3.1-8b-instant',
+        messages: [
+          { role: 'system', content: gymProfile.systemPrompt },
+          ...history.filter(m => m.role)
+        ],
+        max_tokens: 150,
+        temperature: 0.7,
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${CONFIG.GROQ_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
       }
     );
 
-    const aiText = response.data.candidates[0].content.parts[0].text;
-    history.push({ role: 'model', parts: [{ text: aiText }] });
+    const aiText = response.data.choices[0].message.content;
+    history.push({ role: 'assistant', content: aiText });
     return aiText;
   } catch (err) {
-    console.error('Gemini error:', err.response?.data || err.message);
+    console.error('Groq error:', err.response?.data || err.message);
     return "I'm sorry, I'm having a small issue right now. Please hold on or I'll have our manager call you back.";
   }
 }
