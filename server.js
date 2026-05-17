@@ -154,7 +154,7 @@ app.get('/audio/:filename', (req, res) => {
 });
 
 // ── WEBHOOK: INCOMING CALL ───────────────────────────────────
-app.post('/incoming-call', async (req, res) => {
+app.all('/incoming-call', async (req, res) => {
   const callSid = req.body.CallSid || Date.now().toString();
   const gymProfile = getGymProfile();
   console.log(`📞 Incoming call | SID: ${callSid}`);
@@ -183,7 +183,7 @@ app.post('/incoming-call', async (req, res) => {
 });
 
 // ── WEBHOOK: PROCESS SPEECH ──────────────────────────────────
-app.post('/process-speech', async (req, res) => {
+app.all('/process-speech', async (req, res) => {
   const callSid = req.body.CallSid || Date.now().toString();
   const speechResult = req.body.SpeechResult || '';
   const gymProfile = getGymProfile();
@@ -224,7 +224,7 @@ app.post('/process-speech', async (req, res) => {
 });
 
 // ── WEBHOOK: NO INPUT ────────────────────────────────────────
-app.post('/no-input', async (req, res) => {
+app.all('/no-input', async (req, res) => {
   const twiml = new VoiceResponse();
   const audio = await textToSpeech("Sorry, I didn't catch that. Could you please repeat?");
   if (audio) {
