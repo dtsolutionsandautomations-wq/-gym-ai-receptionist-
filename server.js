@@ -65,7 +65,7 @@ async function textToMulawBase64(text) {
         text,
         model_id: 'eleven_turbo_v2',
         voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-        output_format: 'pcm_8000',
+        output_format: 'ulaw_8000',
       },
       {
         headers: { 'xi-api-key': CONFIG.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' },
