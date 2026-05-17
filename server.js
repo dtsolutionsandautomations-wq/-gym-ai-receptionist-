@@ -99,7 +99,7 @@ async function getAIResponse(userMessage, callSid, gymProfile) {
 
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`,
       {
         system_instruction: { parts: [{ text: gymProfile.systemPrompt }] },
         contents: history.filter(m => m.role), // exclude _ts
