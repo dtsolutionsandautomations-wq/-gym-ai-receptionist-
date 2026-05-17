@@ -18,9 +18,15 @@ const CONFIG = {
   ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY,
   ELEVENLABS_VOICE_ID: process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL',
   EXOTEL_SID: process.env.EXOTEL_SID,
-  BASE_URL: process.env.BASE_URL,
+  BASE_URL: process.env.BASE_URL || 'https://gym-ai-receptionist.onrender.com',
   PORT: process.env.PORT || 3000,
 };
+
+
+console.log('CONFIG CHECK:');
+console.log('  BASE_URL:', CONFIG.BASE_URL);
+console.log('  GEMINI_API_KEY:', CONFIG.GEMINI_API_KEY ? 'SET' : 'MISSING');
+console.log('  ELEVENLABS_API_KEY:', CONFIG.ELEVENLABS_API_KEY ? 'SET' : 'MISSING');
 
 // ── TWIML BUILDER (Exotel uses same XML format as Twilio) ────
 function VoiceResponse() {
@@ -99,7 +105,7 @@ async function getAIResponse(userMessage, callSid, gymProfile) {
 
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${CONFIG.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${CONFIG.GEMINI_API_KEY}`,
       {
         system_instruction: { parts: [{ text: gymProfile.systemPrompt }] },
         contents: history.filter(m => m.role), // exclude _ts
