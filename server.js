@@ -65,7 +65,7 @@ async function textToMulawBase64(text) {
         text,
         model_id: 'eleven_turbo_v2',
         voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-        output_format: 'ulaw_8000',
+        output_format: 'mp3_22050_32',
       },
       {
         headers: { 'xi-api-key': CONFIG.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' },
@@ -73,7 +73,7 @@ async function textToMulawBase64(text) {
       }
     );
     const b64 = Buffer.from(res.data).toString('base64');
-    console.log('✅ Got pcm_8000 audio, size:', res.data.byteLength, 'bytes');
+    console.log('✅ Got mp3_22050 audio, size:', res.data.byteLength, 'bytes');
     return b64;
   } catch (err) {
     console.error('ElevenLabs mulaw error:', err.response?.status, err.response?.data?.toString()?.substring(0, 100));
