@@ -1,7 +1,5 @@
 const express = require('express');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -9,8 +7,6 @@ app.use(express.json());
 
 const CONFIG = {
   GROQ_API_KEY: process.env.GROQ_API_KEY,
-  ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY,
-  ELEVENLABS_VOICE_ID: process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL',
   BASE_URL: process.env.BASE_URL || 'https://gym-ai-receptionist.onrender.com',
   PORT: process.env.PORT || 3000,
 };
@@ -28,7 +24,6 @@ GYM INFO:
 - Free trial: 1-day free pass available`;
 
 const conversations = new Map();
-const pendingAudio = new Map();
 
 async function getAIResponse(callSid, userText) {
   if (!conversations.has(callSid)) conversations.set(callSid, []);
@@ -53,143 +48,47 @@ async function getAIResponse(callSid, userText) {
   }
 }
 
-async function saveAudio(text) {
-  try {
-    const res = await axios.post(
-      `https://api.elevenlabs.io/v1/text-to-speech/${CONFIG.ELEVENLABS_VOICE_ID}`,
-      { text, model_id: 'eleven_turbo_v2', voice_settings: { stability: 0.5, similarity_boost: 0.75 } },
-      { headers: { 'xi-api-key': CONFIG.ELEVENLABS_API_KEY }, responseType: 'arraybuffer' }
-    );
-    const filename = `audio_${Date.now()}.mp3`;
-    fs.writeFileSync(path.join('/tmp', filename), Buffer.from(res.data));
-    return `${CONFIG.BASE_URL}/audio/${filename}`;
-  } catch (err) {
-    console.error('ElevenLabs error:', err.message);
-    return null;
+function xml(say, nextUrl, isEnd = false) {
+  if (isEnd) {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice" language="en-IN">${say}</Say>
+  <Hangup/>
+</Response>`;
   }
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice" language="en-IN">${say}</Say>
+  <Gather input="speech" action="${nextUrl}" method="POST" speechTimeout="3" timeout="6" language="en-IN"></Gather>
+  <Redirect method="POST">${CONFIG.BASE_URL}/no-input</Redirect>
+</Response>`;
 }
 
-app.get('/audio/:f', (req, res) => {
-  const fp = path.join('/tmp', req.params.f);
-  if (fs.existsSync(fp)) {
-    res.set('Content-Type', 'audio/mpeg');
-    res.sendFile(fp);
-  } else res.status(404).send('Not found');
-});
-
-// Step 1: Exotel calls this — respond INSTANTLY with Say, 
-// then redirect to /play-greeting which has the real audio
 app.all('/incoming-call', async (req, res) => {
   const callSid = req.body?.CallSid || req.query?.CallSid || Date.now().toString();
-  console.log('📞 Incoming call:', callSid);
-
-  // Respond immediately — no waiting
-  res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="alice" language="en-IN">Namaste! Welcome to Titan Fitness Gym. Please hold for a moment.</Say>
-  <Redirect method="POST">${CONFIG.BASE_URL}/greeting?CallSid=${callSid}</Redirect>
-</Response>`);
-
-  // Generate AI + audio in background
-  getAIResponse(callSid, 'Customer called. Greet them warmly in under 15 words.').then(async (greeting) => {
-    console.log('🤖 Greeting:', greeting);
-    const audioUrl = await saveAudio(greeting);
-    pendingAudio.set(callSid + '_greeting', audioUrl || greeting);
-    console.log('✅ Greeting ready');
-  });
+  console.log('📞 Call:', callSid);
+  const greeting = await getAIResponse(callSid, 'Customer called. Greet warmly under 15 words.');
+  console.log('🤖 Greeting:', greeting);
+  res.type('text/xml').send(xml(greeting, `${CONFIG.BASE_URL}/process-speech?CallSid=${callSid}`));
 });
 
-// Step 2: By now audio should be ready — play it
-app.all('/greeting', async (req, res) => {
-  const callSid = req.body?.CallSid || req.query?.CallSid || '';
-  const key = callSid + '_greeting';
-  
-  // Wait up to 8 seconds for audio to be ready
-  let waited = 0;
-  while (!pendingAudio.has(key) && waited < 8000) {
-    await new Promise(r => setTimeout(r, 200));
-    waited += 200;
-  }
-
-  const audioVal = pendingAudio.get(key) || '';
-  pendingAudio.delete(key);
-
-  const audioTag = audioVal.startsWith('http')
-    ? `<Play>${audioVal}</Play>`
-    : `<Say voice="alice" language="en-IN">${audioVal}</Say>`;
-
-  res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  ${audioTag}
-  <Gather input="speech" action="${CONFIG.BASE_URL}/process-speech?CallSid=${callSid}" method="POST" speechTimeout="3" timeout="6" language="en-IN">
-  </Gather>
-  <Redirect method="POST">${CONFIG.BASE_URL}/no-input?CallSid=${callSid}</Redirect>
-</Response>`);
-});
-
-// Step 3: Process what caller said
 app.all('/process-speech', async (req, res) => {
   const callSid = req.body?.CallSid || req.query?.CallSid || Date.now().toString();
   const speech = req.body?.SpeechResult || req.query?.SpeechResult || '';
   console.log('🎤 Speech:', speech);
-
-  // Respond immediately with acknowledgment
-  res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="alice" language="en-IN">One moment please.</Say>
-  <Redirect method="POST">${CONFIG.BASE_URL}/reply?CallSid=${callSid}&amp;speech=${encodeURIComponent(speech)}</Redirect>
-</Response>`);
-
-  // Generate reply in background
-  getAIResponse(callSid, speech || 'hello').then(async (reply) => {
-    console.log('🤖 Reply:', reply);
-    const audioUrl = await saveAudio(reply);
-    pendingAudio.set(callSid + '_reply', audioUrl || reply);
-  });
-});
-
-// Step 4: Play the AI reply
-app.all('/reply', async (req, res) => {
-  const callSid = req.body?.CallSid || req.query?.CallSid || '';
-  const speech = req.body?.speech || req.query?.speech || '';
-  const key = callSid + '_reply';
-
-  let waited = 0;
-  while (!pendingAudio.has(key) && waited < 8000) {
-    await new Promise(r => setTimeout(r, 200));
-    waited += 200;
-  }
-
-  const audioVal = pendingAudio.get(key) || '';
-  pendingAudio.delete(key);
-
   const isEnd = ['bye', 'goodbye', 'ok bye'].some(k => speech.toLowerCase().includes(k));
-  const audioTag = audioVal.startsWith('http')
-    ? `<Play>${audioVal}</Play>`
-    : `<Say voice="alice" language="en-IN">${audioVal}</Say>`;
-
-  if (isEnd) {
-    res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response>${audioTag}<Hangup/></Response>`);
-  } else {
-    res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  ${audioTag}
-  <Gather input="speech" action="${CONFIG.BASE_URL}/process-speech?CallSid=${callSid}" method="POST" speechTimeout="3" timeout="6" language="en-IN">
-  </Gather>
-  <Redirect method="POST">${CONFIG.BASE_URL}/no-input?CallSid=${callSid}</Redirect>
-</Response>`);
-  }
+  const reply = await getAIResponse(callSid, speech || 'hello');
+  console.log('🤖 Reply:', reply);
+  res.type('text/xml').send(xml(reply, `${CONFIG.BASE_URL}/process-speech?CallSid=${callSid}`, isEnd));
 });
 
 app.all('/no-input', (req, res) => {
   const callSid = req.body?.CallSid || req.query?.CallSid || '';
-  res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="alice" language="en-IN">Sorry, I didn't catch that. How can I help you?</Say>
-  <Gather input="speech" action="${CONFIG.BASE_URL}/process-speech?CallSid=${callSid}" method="POST" speechTimeout="3" timeout="6" language="en-IN">
-  </Gather>
-</Response>`);
+  res.type('text/xml').send(xml(
+    "Sorry, I didn't catch that. How can I help you?",
+    `${CONFIG.BASE_URL}/process-speech?CallSid=${callSid}`
+  ));
 });
 
-app.get('/', (req, res) => res.json({ status: '🏋️ Gym AI Receptionist running!' }));
+app.get('/', (req, res) => res.json({ status: '🏋️ Running!' }));
 app.listen(CONFIG.PORT, () => console.log(`🏋️ Live on port ${CONFIG.PORT}`));
